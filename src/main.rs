@@ -1,35 +1,120 @@
-#![feature(hash_drain_filter)]
+#![feature(hash_drain_filter, iter_intersperse)]
 
-use std::{fmt, io::Write, collections::{HashSet, HashMap}, error::Error, ops::Not};
+use std::{fmt, io::Write, collections::{HashSet, HashMap}, error::Error, net::TcpStream, sync::{mpsc::{Receiver, self, TryRecvError}}, thread, time::Duration};
 use board::Board;
 use color_format::{cwrite, cprintln, cformat};
+use console::{Term, Key};
+use piece::{Color, Piece};
+use server::Move;
 use vecm::{vec::PolyVec2, vec2};
+
+use crate::server::send;
 
 mod board;
 mod moves;
+mod piece;
+mod server;
 
 type Pos = PolyVec2<i8>;
 
-pub fn inside(pos: Pos) -> bool {
-    pos.x >= 0 && pos.y >= 0 && pos.x <= 7 && pos.y <= 7
-}
-
-pub struct Player {
-    name: String,
-    taken_pieces: Vec<Piece>,
-}
-impl Player {
-    fn new(name: String) -> Self {
-        Self {
-            name,
-            taken_pieces: vec![],
+fn main() -> Result<(), Box<dyn Error>> {
+    let mut args = std::env::args().skip(1);
+    let mut server = false;
+    let mut fen = None;
+    let mut ip = None;
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "-s" | "--server" => server = true,
+            "-f" | "--fen" => fen = Some(args.next().expect("fen expected after -f/--fen")),
+            "-c" | "--connect" => ip = Some(args.next().expect("connect requires ip")),
+            _ => eprintln!("unrecognized arg {arg}")
         }
     }
-}
+    let (board, color) = if let Some(fen) = fen {
+        Board::from_fen(&fen).expect("invalid FEN provided as argument")
+    } else {
+        (Board::starting_position(), Color::White)
+    };  
+    if server {
+        loop {
+            match server::game(board, color) {
+                Ok(()) => println!("Played a game!"),
+                Err(err) => {
+                    println!("Game failed: {err}");
+                    std::thread::sleep(Duration::from_millis(500));
+                }
+            }
+        }
+    } else {
+        
+        print!("Enter Name: ");
+        std::io::stdout().flush()?;
+        let mut name = String::new();
+        std::io::stdin().read_line(&mut name)?;
+        name = name.trim().to_owned();
 
-enum GameEnd {
-    Draw,
-    Winner(Color),
+        let (the_game, remote) = if let Some(ip) = ip {
+            println!("Connecting to ip: {ip}");
+            let mut server = TcpStream::connect(ip.clone())?;
+            server::send(&mut server, server::PlayerInfo { name: name.clone() })?;
+            let game_info: server::GameInfo = server::recv(&mut server)?;
+
+            let game = Game::new(vec2![0, 0], name.clone(), game_info.other_player, board, color);
+
+            let (tx, rx) = mpsc::channel();
+
+            let server2 = server.try_clone()?;
+            thread::spawn(move || {
+                let mut server = server2;
+                loop {
+                    match server::recv(&mut server) {
+                        Ok(move_) => match tx.send(move_) {
+                            Ok(_) => {}
+                            Err(_) => break
+                        }
+                        Err(err) => {
+                            println!("Server disconnected {err:?}");
+                            break;
+                        }
+                    }
+                }
+            });
+
+            let remote = Remote {
+                server: rx,
+                color: if game_info.is_black { Color::Black } else { Color::White },
+                socket: server,
+            };
+            (game, Some(remote))
+        
+        } else {
+            let game = Game::new(vec2![0, 0], name.clone(), "Computer".to_owned(), board, color);
+            (game, None)
+        };
+
+ 
+        cprintln!("  ~~~  #b<CHESS>   ~~~\n");
+ 
+        let term = Term::stdout();
+        term.hide_cursor()?;
+        
+        print!("{the_game}");
+        std::io::stdout().flush()?;
+
+        let render = move |game: &Game, term: &Term| -> Result<(), Box<dyn Error>> {
+            //let mut stdout = std::io::stdout().into_raw_mode()?;
+            //write!(stdout, "{}", termion::cursor::Hide)?;
+            term.move_cursor_up(9)?;
+            term.move_cursor_left(100)?;
+            //write!(stdout, "{}{}", termion::cursor::Up(9), termion::cursor::Left(100))?;
+            //drop(stdout);
+            print!("{game}");
+            std::io::stdout().flush()?;
+            Ok(())
+        };
+
+        game(render, term, the_game, remote)
+    }
 }
 
 pub struct Game {
@@ -42,10 +127,10 @@ pub struct Game {
     black: Player,
 }
 impl Game {
-    fn new(cursor: Pos, white_name: String, black_name: String) -> Self {
+    fn new(cursor: Pos, white_name: String, black_name: String, board: Board, turn: Color) -> Self {
         let mut board = Self {
-            board: Board::starting_position(),
-            turn: Color::White,
+            board,
+            turn,
             cursor,
             possible_moves: HashMap::new(),
             moving: None,
@@ -170,102 +255,96 @@ impl fmt::Display for Game {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Piece {
-    King,
-    Queen,
-    Bishop,
-    Knight,
-    Rook,
-    Pawn,
+pub struct Player {
+    name: String,
+    taken_pieces: Vec<Piece>,
 }
-impl Piece {
-    fn character(self, color: Color) -> String {
-        let c = match (self, Color::Black) {
-            (Piece::King, Color::Black) => '♚',
-            (Piece::King, Color::White) => '♔',
-            (Piece::Queen, Color::Black) => '♛',
-            (Piece::Queen, Color::White) => '♕',
-            (Piece::Bishop, Color::Black) => '♝',
-            (Piece::Bishop, Color::White) => '♗',
-            (Piece::Knight, Color::Black) => '♞',
-            (Piece::Knight, Color::White) => '♘',
-            (Piece::Rook, Color::Black) => '♜',
-            (Piece::Rook, Color::White) => '♖',
-            (Piece::Pawn, Color::Black) => '♟',
-            (Piece::Pawn, Color::White) => '♙',
-        };
-        match color {
-            Color::White => cformat!("#rgb(180,180,180)<{}>", c),
-            Color::Black => cformat!("#rgb(86,83,82)<{}>", c),
+impl Player {
+    fn new(name: String) -> Self {
+        Self {
+            name,
+            taken_pieces: vec![],
         }
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Color {
-    Black,
-    White,
+enum GameEnd {
+    Draw,
+    Winner(Color),
 }
-impl Not for Color {
-    type Output = Self;
 
-    fn not(self) -> Self::Output {
-        match self {
-            Self::Black => Self::White,
-            Self::White => Self::Black,
+struct Remote {
+    socket: TcpStream,
+    server: Receiver<Move>,
+    color: Color,
+}
+
+fn game(
+    mut render: impl FnMut(&Game, &Term) -> Result<(), Box<dyn Error>>, 
+    term: Term,
+    mut game: Game,
+    mut remote: Option<Remote>
+) -> Result<(), Box<dyn Error>> {
+
+    fn render_end(mut render: impl FnMut(&Game, &Term, ) -> Result<(), Box<dyn Error>>, game: Game, term: &Term, end: GameEnd)
+    -> Result<(), Box<dyn Error>> {
+        render(&game, term)?;
+        match end {
+            GameEnd::Winner(Color::Black) => cprintln!("\n\n{} #g<won> as Black!", game.black.name),
+            GameEnd::Winner(Color::White) => cprintln!("\n\n{} #g<won> as White!", game.white.name),
+            GameEnd::Draw => cprintln!("Game ended in a #rgb(127,127,127)<draw>!")
         }
-    }
-}
 
-fn main() -> Result<(), Box<dyn Error>> {
-    let term = console::Term::stdout();
-    loop {
-        game(&term)?;
-    }
-}
-
-fn game(term: & console::Term) -> Result<(), Box<dyn Error>> {
-    print!("Enter Name: ");
-    std::io::stdout().flush()?;
-    let name = term.read_line()?;
-
-    let mut game = Game::new(vec2![0, 0], name, "Computer".to_owned());
-    term.hide_cursor()?;
-    cprintln!("  ~~~  #b<CHESS>   ~~~\n");
-
-    print!("{game}");
-    std::io::stdout().flush()?;
-
-    let render = |game: &Game| -> Result<(), Box<dyn Error>>{
-        term.move_cursor_up(9)?;
-        term.move_cursor_left(100)?;
-        print!("{game}");
-        std::io::stdout().flush()?;
         Ok(())
-    };
+    }
 
     loop {
-        
-        let key = term.read_key()?;
-        
+        let key = if let Some(remote) = &remote {
+            match remote.server.try_recv() {
+                Ok(m) => {
+                    if game.turn == remote.color {
+                        println!("Remote sent move while it was your turn!");
+                        return Ok(());
+                    }
+                    let end = game.play_move(vec2![m.x1, m.y1], vec2![m.x2, m.y2]);
+                    if let Some(end) = end {
+                        render_end(render, game, &term, end)?;
+                        return Ok(());
+                    }
+                    continue
+                }
+                Err(TryRecvError::Empty) => term.read_key()?,
+                Err(TryRecvError::Disconnected) => {
+                    println!("Server disconnected!");
+                    return Ok(())
+                }
+            }
+
+        } else {
+            term.read_key()?
+        };
+
         match key {
-            console::Key::Char('m') | console::Key::ArrowLeft => if game.cursor.x > 0 { game.cursor.x -= 1; },
-            console::Key::Char('i') | console::Key::ArrowRight => if game.cursor.x < 7 { game.cursor.x += 1; },
-            console::Key::Char('e') | console::Key::ArrowUp => if game.cursor.y < 7 { game.cursor.y += 1; },
-            console::Key::Char('n') | console::Key::ArrowDown => if game.cursor.y > 0 { game.cursor.y -= 1; },
-            console::Key::Char(' ') | console::Key::Enter => {
+            Key::Char('m') | Key::ArrowLeft => if game.cursor.x > 0 { game.cursor.x -= 1; },
+            Key::Char('i') | Key::ArrowRight => if game.cursor.x < 7 { game.cursor.x += 1; },
+            Key::Char('e') | Key::ArrowUp => if game.cursor.y < 7 { game.cursor.y += 1; },
+            Key::Char('n') | Key::ArrowDown => if game.cursor.y > 0 { game.cursor.y -= 1; },
+            Key::Char(' ') | Key::Char('\n') => {
+                if let Some(remote) = &remote {
+                    if game.turn != remote.color {
+                        game.moving = None;
+                        continue;
+                    }
+                }
                 if let Some(moving) = game.moving {
                     let cursor = game.cursor;
                     if game.possible_moves.get(&moving).unwrap().contains(&cursor) {
+                        if let Some(remote) = &mut remote {
+                            send(&mut remote.socket, Move { x1: moving.x, y1: moving.y, x2: cursor.x, y2: cursor.y })?;
+                        }
                         let end = game.play_move(moving, cursor);
                         if let Some(end) = end {
-                            render(&game)?;
-                            match end {
-                                GameEnd::Winner(Color::Black) => cprintln!("\n\n{} #g<won> as Black!", game.black.name),
-                                GameEnd::Winner(Color::White) => cprintln!("\n\n{} #g<won> as White!", game.white.name),
-                                GameEnd::Draw => cprintln!("Game ended in a #rgb(127,127,127)<draw>!")
-                            }
+                            render_end(render, game, &term, end)?;
                             return Ok(());
                         }
                     }
@@ -279,15 +358,15 @@ fn game(term: & console::Term) -> Result<(), Box<dyn Error>> {
                     }
                 }
             }
-            console::Key::Escape => {
+            Key::Escape => {
                 game.moving = None;
             }
-            console::Key::PageUp => {} // history
-            console::Key::PageDown => {} // history
-            console::Key::Char(_) => {}
+            Key::PageUp => {} // history
+            Key::PageDown => {} // history
+            Key::Char(_) => {}
             _ => {}
         }
 
-        render(&game)?;
+        render(&game, &term)?;
     }
 }

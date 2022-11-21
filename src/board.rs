@@ -5,11 +5,33 @@ use vecm::vec2;
 use crate::{Piece, Color, Pos, moves::moves};
 
 #[derive(Clone, Copy)]
-#[derive(Default)]
-struct Moved {
-    king: bool,
-    a_rook: bool,
-    h_rook: bool,
+pub struct Castle {
+    pub short: bool,
+    pub long: bool,
+}
+impl Castle {
+    fn new() -> Self {
+        Self { short: true, long: true }
+    }
+
+    /// (white, black)
+    fn from_fen(fen: &str) -> Option<(Self, Self)> {
+        let mut white = Castle { short: false, long: false };
+        let mut black = Castle { short: false, long: false };
+
+        if fen == "-" { return Some((white, black)) }
+        
+        for c in fen.chars() {
+            match c.to_ascii_lowercase() {
+                'k' => black.short = true,
+                'q' => black.long = true,
+                'K' => white.short = true,
+                'Q' => white.long = true,
+                _ => return None
+            }
+        }
+        Some((white, black))
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -17,8 +39,8 @@ pub struct Board {
     // rows then files
     board: [[Option<(Piece, Color)>; 8]; 8],
     moved_pawn: Option<Pos>,
-    white_moved: Moved,
-    black_moved: Moved,
+    white_castle: Castle,
+    black_castle: Castle,
 }
 impl Index<Pos> for Board {
     type Output = Option<(Piece, Color)>;
@@ -48,9 +70,90 @@ impl Board {
         Self {
             board,
             moved_pawn: None,
-            white_moved: Moved::default(),
-            black_moved: Moved::default()
+            white_castle: Castle::new(),
+            black_castle: Castle::new()
         }
+    }
+
+    pub fn from_fen(fen: &str) -> Option<(Self, Color)> {
+        fn piece(c: char) -> Option<Piece> {
+            Some(match c {
+                'k' => Piece::King,
+                'p' => Piece::Pawn,
+                'n' => Piece::Knight,
+                'b' => Piece::Bishop,
+                'r' => Piece::Rook,
+                'q' => Piece::Queen,
+                _ => return None
+            })
+        }
+        fn pos(s: &str) -> Option<Pos> {
+            let a = s.chars().next()?;
+            let b = s.chars().next()?;
+            if s.chars().next().is_some() || a < 'a' || a > 'h' || b < '1' || b > '8' {
+                return None;
+            }
+            Some(Pos::new((a as u8 - b'a') as i8, (b as u8 - b'1') as i8))
+        }
+
+        let mut sections = fen.split(' ');
+
+        let pieces = sections.next()?;
+
+        let mut board = [[None; 8]; 8];
+
+        let mut file = 0;
+        let mut rank = 7;
+
+        for c in pieces.chars() {
+            match c {
+                '/' => {
+                    file = 0;
+                    rank -= 1;
+                    if rank < 0 { return None }
+                }
+                '0'..='9' => {
+                    file += c as u8 - b'0';
+                }
+                'a'..='z' | 'A'..='Z' => {
+                    if file > 7 { return None }
+                    board[rank as usize][file as usize] = Some((
+                        piece(c.to_ascii_lowercase())?,
+                        if c.is_ascii_lowercase() { Color::Black } else { Color::White }
+                    ));
+                    file += 1;
+                }
+                _ => return None
+            }
+        }
+
+        let turn = match sections.next()? {
+            "w" => Color::White,
+            "b" => Color::Black,
+            _ => return None,
+        };
+        
+        let (white_castle, black_castle) = Castle::from_fen(sections.next()?)?;
+
+        let moved_pawn = match sections.next()? {
+            "-" => None,
+            s => Some(pos(s)? + if turn == Color::White { vec2![0,1] } else { vec2![0, -1] })
+        };
+
+        let _halfmoves: u32 = sections.next()?.parse().ok()?;
+        let _fullmoves: u32 = sections.next()?.parse().ok()?;
+
+        if sections.next().is_some() { return None }
+
+        Some((
+            Self {
+                board,
+                moved_pawn,
+                white_castle,
+                black_castle,
+            },
+            turn
+        ))
     }
 
     pub fn moves(&self, turn: Color) -> (HashMap<Pos, HashSet<Pos>>, usize) {
@@ -81,36 +184,34 @@ impl Board {
         if piece == Piece::King {
             match color {
                 Color::Black => {
-                    if to == vec2![2, 7] && !self.black_moved.a_rook && !self.black_moved.king {
+                    if to == vec2![2, 7] && self.black_castle.long {
                         self.board[7][3] = self.board[7][0];
                         self.board[7][0] = None;
-                        self.black_moved.a_rook = true;
-                    } else if to == vec2![6, 7] && !self.black_moved.h_rook && !self.black_moved.king {
+                    } else if to == vec2![6, 7] && self.black_castle.short {
                         self.board[7][5] = self.board[7][7];
                         self.board[7][7] = None;
-                        self.black_moved.h_rook = true;
                     }
-                    self.black_moved.king = true;
+                    self.black_castle.short = false;
+                    self.black_castle.long = false;
                 }
                 Color::White => {
-                    if to == vec2![2, 0] && !self.white_moved.a_rook && !self.white_moved.king {
+                    if to == vec2![2, 0] && self.white_castle.long {
                         self.board[0][3] = self.board[0][0];
                         self.board[0][0] = None;
-                        self.white_moved.a_rook = true;
-                    } else if to == vec2![6, 0] && !self.white_moved.h_rook && !self.white_moved.king {
+                    } else if to == vec2![6, 0] && self.white_castle.short {
                         self.board[0][5] = self.board[0][7];
                         self.board[0][6] = None;
-                        self.white_moved.h_rook = true;
                     }
-                    self.white_moved.king = true;
+                    self.white_castle.short = false;
+                    self.white_castle.long = false;
                 }
             }
         } else if piece == Piece::Rook {
             match (from.x, color) {
-                (0, Color::Black) => self.black_moved.a_rook = true,
-                (7, Color::Black) => self.black_moved.h_rook = true,
-                (0, Color::White) => self.white_moved.a_rook = true,
-                (7, Color::White) => self.white_moved.h_rook = true,
+                (0, Color::Black) => self.black_castle.long = false,
+                (7, Color::Black) => self.black_castle.short = false,
+                (0, Color::White) => self.white_castle.long = false,
+                (7, Color::White) => self.white_castle.short = false,
                 _ => {}
             }
         } else if piece == Piece::Pawn {
@@ -152,12 +253,11 @@ impl Board {
     }
 
     // (long castle, short castle)
-    pub fn can_castle(&self, color: Color) -> (bool, bool) {
-        let moved = match color {
-            Color::Black => self.black_moved,
-            Color::White => self.white_moved,
-        };
-        (!moved.a_rook && !moved.king, !moved.h_rook && !moved.king)
+    pub fn can_castle(&self, color: Color) -> Castle {
+        match color {
+            Color::Black => self.black_castle,
+            Color::White => self.white_castle,
+        }
     }
 
     pub fn find_king(&self, color: Color) -> Option<Pos> {

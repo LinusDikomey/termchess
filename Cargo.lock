@@ -20,6 +20,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
+name = "binverse"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d657dbe5cb62372a5127d5b30f679ba470ea52f371c438364bc22c79e679bcb8"
+dependencies = [
+ "binverse_derive",
+]
+
+[[package]]
+name = "binverse_derive"
+version = "0.6.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "47e8f3303e655483734e0c2671d332ad124b5e31861591aca340892f554df4ff"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "color-format"
 version = "0.1.0"
 source = "git+https://github.com/LinusDikomey/color-format#001b501f69cac162d4dccc054bfa451525d9696e"
@@ -121,8 +141,11 @@ dependencies = [
 name = "termchess"
 version = "0.1.0"
 dependencies = [
+ "binverse",
+ "binverse_derive",
  "color-format",
  "console",
+ "libc",
  "vecm",
 ]
 

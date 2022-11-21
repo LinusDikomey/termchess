@@ -1,0 +1,45 @@
+{
+    // Use IntelliSense to learn about possible attributes.
+    // Hover to view descriptions of existing attributes.
+    // For more information, visit: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug executable 'termchess'",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=termchess",
+                    "--package=termchess"
+                ],
+                "filter": {
+                    "name": "termchess",
+                    "kind": "bin"
+                }
+            },
+            "args": ["rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug unit tests in executable 'termchess'",
+            "cargo": {
+                "args": [
+                    "test",
+                    "--no-run",
+                    "--bin=termchess",
+                    "--package=termchess"
+                ],
+                "filter": {
+                    "name": "termchess",
+                    "kind": "bin"
+                }
+            },
+            "args": [],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

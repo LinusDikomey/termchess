@@ -1,7 +1,7 @@
 use std::collections::HashSet;
 use vecm::vec2;
 
-use crate::{Piece, Pos, Color, inside, board::Board};
+use crate::{Piece, Pos, Color, board::Board};
 
 pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos> {
     #[derive(PartialEq, Eq)]
@@ -55,19 +55,19 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos>
                 }
             }
 
-            let (long_castle, short_castle) = game.can_castle(color);
+            let castle = game.can_castle(color);
             let y = if color == Color::Black { 7 } else { 0 };
             // performance optimization possible here by not recalculating all moves
 
             if 
-                long_castle
+                castle.long
                 && (1..4).all(|x| occupied(vec2![x, y]) == Ty::No)
                 && (2..=4).all(|x| !game.threatens(vec2![x, y], !color))
             {
                 moves.insert(vec2![2, y]);
             }
             if
-                short_castle
+                castle.short
                 && (5..7).all(|x| occupied(vec2![x, y]) == Ty::No)
                 && (4..=6).all(|x| !game.threatens(vec2![x, y], !color))
             {
@@ -120,4 +120,8 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos>
         }
     }
     moves
+}
+
+fn inside(pos: Pos) -> bool {
+    pos.x >= 0 && pos.y >= 0 && pos.x <= 7 && pos.y <= 7
 }
