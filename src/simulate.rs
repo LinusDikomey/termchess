@@ -1,7 +1,7 @@
 use crate::{board::Board, Pos, piece::Color};
 
 
-pub fn game(s: &str) {
+pub fn game() {
     let s = "
 White played [3, 1] -> [3, 3]
 Black played [3, 6] -> [3, 4]

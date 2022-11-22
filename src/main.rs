@@ -1,6 +1,7 @@
 #![feature(hash_drain_filter, iter_intersperse)]
 
 use std::{fmt, io::Write, collections::{HashSet, HashMap}, error::Error, net::TcpStream, sync::{mpsc::{Receiver, self, TryRecvError}}, thread, time::Duration};
+use binverse::error::BinverseError;
 use board::Board;
 use color_format::{cwrite, cprintln, cformat};
 use console::{Term, Key};
@@ -23,18 +24,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut server = false;
     let mut fen = None;
     let mut ip = None;
-    let mut simulate = None;
+    let mut simulate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-s" | "--server" => server = true,
             "-f" | "--fen" => fen = Some(args.next().expect("fen expected after -f/--fen")),
             "-c" | "--connect" => ip = Some(args.next().expect("connect requires ip")),
-            "--simulate" => simulate = Some(args.next().expect("simulate requires movestring")),
+            "--simulate" => simulate = true,
             _ => eprintln!("unrecognized arg {arg}")
         }
     }
-    if let Some(simulate) = simulate {
-        simulate::game(&simulate);
+    if simulate {
+        simulate::game();
     }
     let (board, color) = if let Some(fen) = fen {
         Board::from_fen(&fen).expect("invalid FEN provided as argument")
@@ -84,9 +85,12 @@ fn main() -> Result<(), Box<dyn Error>> {
                             Ok(_) => {}
                             Err(_) => break
                         }
+                        Err(BinverseError::IO(io)) if io.kind() == std::io::ErrorKind::UnexpectedEof => {
+                            break
+                        }
                         Err(err) => {
                             println!("Server disconnected {err:?}");
-                            break;
+                            break
                         }
                     }
                 }
