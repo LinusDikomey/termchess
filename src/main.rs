@@ -15,7 +15,6 @@ mod board;
 mod moves;
 mod piece;
 mod server;
-mod simulate;
 
 type Pos = PolyVec2<i8>;
 
@@ -24,18 +23,13 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut server = false;
     let mut fen = None;
     let mut ip = None;
-    let mut simulate = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-s" | "--server" => server = true,
             "-f" | "--fen" => fen = Some(args.next().expect("fen expected after -f/--fen")),
             "-c" | "--connect" => ip = Some(args.next().expect("connect requires ip")),
-            "--simulate" => simulate = true,
             _ => eprintln!("unrecognized arg {arg}")
         }
-    }
-    if simulate {
-        simulate::game();
     }
     let (board, color) = if let Some(fen) = fen {
         Board::from_fen(&fen).expect("invalid FEN provided as argument")

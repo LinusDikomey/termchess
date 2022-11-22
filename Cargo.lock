@@ -145,7 +145,6 @@ dependencies = [
  "binverse_derive",
  "color-format",
  "console",
- "libc",
  "vecm",
 ]
 
