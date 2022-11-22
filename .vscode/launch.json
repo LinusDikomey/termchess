@@ -19,7 +19,7 @@
                     "kind": "bin"
                 }
             },
-            "args": ["rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"],
+            "args": ["-c", "81.169.212.158:1337"],
             "cwd": "${workspaceFolder}"
         },
         {

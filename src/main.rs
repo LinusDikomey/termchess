@@ -14,6 +14,7 @@ mod board;
 mod moves;
 mod piece;
 mod server;
+mod simulate;
 
 type Pos = PolyVec2<i8>;
 
@@ -22,13 +23,18 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut server = false;
     let mut fen = None;
     let mut ip = None;
+    let mut simulate = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-s" | "--server" => server = true,
             "-f" | "--fen" => fen = Some(args.next().expect("fen expected after -f/--fen")),
             "-c" | "--connect" => ip = Some(args.next().expect("connect requires ip")),
+            "--simulate" => simulate = Some(args.next().expect("simulate requires movestring")),
             _ => eprintln!("unrecognized arg {arg}")
         }
+    }
+    if let Some(simulate) = simulate {
+        simulate::game(&simulate);
     }
     let (board, color) = if let Some(fen) = fen {
         Board::from_fen(&fen).expect("invalid FEN provided as argument")
@@ -46,7 +52,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
     } else {
-        
         print!("Enter Name: ");
         std::io::stdout().flush()?;
         let mut name = String::new();
@@ -55,11 +60,18 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         let (the_game, remote) = if let Some(ip) = ip {
             println!("Connecting to ip: {ip}");
-            let mut server = TcpStream::connect(ip.clone())?;
+            let mut server = TcpStream::connect(ip)?;
             server::send(&mut server, server::PlayerInfo { name: name.clone() })?;
             let game_info: server::GameInfo = server::recv(&mut server)?;
 
-            let game = Game::new(vec2![0, 0], name.clone(), game_info.other_player, board, color);
+            let mut white_name = name;
+            let mut black_name = game_info.other_player;
+            if game_info.is_black {
+                std::mem::swap(&mut white_name, &mut black_name);
+            }
+
+            let mut game = Game::new(vec2![0, 0], white_name, black_name, board, color);
+            game.flip_board = game_info.is_black;
 
             let (tx, rx) = mpsc::channel();
 
@@ -125,6 +137,7 @@ pub struct Game {
     possible_moves: HashMap<Pos, HashSet<Pos>>,
     white: Player,
     black: Player,
+    flip_board: bool,
 }
 impl Game {
     fn new(cursor: Pos, white_name: String, black_name: String, board: Board, turn: Color) -> Self {
@@ -136,6 +149,7 @@ impl Game {
             moving: None,
             white: Player::new(white_name),
             black: Player::new(black_name),
+            flip_board: false,
         };
         
         board.compute_moves();
@@ -199,14 +213,18 @@ impl fmt::Display for Game {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         cwrite!(f, "#bg:rgb(102,51,0);black<## >")?;
         for file in 0..8 {
-            cwrite!(f, "#bg:rgb(102,51,0);g<{} >", ('a' as u8 + file) as char)?;
+            cwrite!(f, "#bg:rgb(102,51,0);g<{} >", (b'a' + file) as char)?;
         }
         cwrite!(f, "#bg:rgb(102,51,0)<  >")?;
         self.after_text(f, -1)?;
         writeln!(f)?;
 
         let mut bg_white = true;
-        for (rank, row) in self.board.iter().enumerate().rev() {
+        for i in 0usize..8 {
+
+            let rank = if self.flip_board { i } else { 7-i };
+            let row = self.board.iter().nth(rank).unwrap();
+
             cwrite!(f, "#bg:rgb(102,51,0);g<{} >", rank + 1)?;
             for (file, piece) in row.into_iter().enumerate() {
                 let on_cursor = self.cursor.x == file as i8 && self.cursor.y == rank as i8;
@@ -285,7 +303,6 @@ fn game(
     mut game: Game,
     mut remote: Option<Remote>
 ) -> Result<(), Box<dyn Error>> {
-
     fn render_end(mut render: impl FnMut(&Game, &Term, ) -> Result<(), Box<dyn Error>>, game: Game, term: &Term, end: GameEnd)
     -> Result<(), Box<dyn Error>> {
         render(&game, term)?;
@@ -324,11 +341,22 @@ fn game(
             term.read_key()?
         };
 
+        let up = |game: &mut Game| {
+            if game.cursor.y < 7 {
+                game.cursor.y += 1;
+            }
+        };
+        let down = |game: &mut Game| {
+            if game.cursor.y > 0 {
+                game.cursor.y -= 1;
+            }
+        };
+
         match key {
             Key::Char('m') | Key::ArrowLeft => if game.cursor.x > 0 { game.cursor.x -= 1; },
             Key::Char('i') | Key::ArrowRight => if game.cursor.x < 7 { game.cursor.x += 1; },
-            Key::Char('e') | Key::ArrowUp => if game.cursor.y < 7 { game.cursor.y += 1; },
-            Key::Char('n') | Key::ArrowDown => if game.cursor.y > 0 { game.cursor.y -= 1; },
+            Key::Char('e') | Key::ArrowUp => if game.flip_board { down(&mut game) } else { up(&mut game) }
+            Key::Char('n') | Key::ArrowDown => if game.flip_board { up(&mut game) } else { down(&mut game) }
             Key::Char(' ') | Key::Char('\n') => {
                 if let Some(remote) = &remote {
                     if game.turn != remote.color {

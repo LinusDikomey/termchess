@@ -18,7 +18,7 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos>
     let dir_moves = |moves: &mut HashSet<Pos>, dir: Pos| {
         let mut cur = pos;
         loop {
-            cur += Pos::from(dir);
+            cur += dir;
             if !inside(cur) { break }
             match occupied(cur) {
                 Ty::No => {
@@ -30,7 +30,6 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos>
                 }
                 Ty::Ally => break
             }
-            moves.insert(cur);
         }
     };
 

@@ -1,4 +1,4 @@
-use std::{error::Error, net::{TcpListener, IpAddr}, io::{Read, Write}};
+use std::{error::Error, net::{TcpListener, IpAddr}, io::{Read, Write}, time::Duration};
 
 use binverse::{streams::{Serializer, Deserializer}, serialize::{Serialize, Deserialize}, error::BinverseError};
 use binverse_derive::serializable;
@@ -26,11 +26,11 @@ pub struct GameInfo {
     pub is_black: bool,
 }
 
-pub fn send<'a, T: Serialize<W>, W: Write>(p: W, t: T) -> Result<(), BinverseError> {
+pub fn send<T: Serialize<W>, W: Write>(p: W, t: T) -> Result<(), BinverseError> {
     let mut s = Serializer::new_no_revision(p);
     t.serialize(&mut s)
 }
-pub fn recv<'a, T: Deserialize<R>, R: Read>(p: R) -> Result<T, BinverseError> {
+pub fn recv<T: Deserialize<R>, R: Read>(p: R) -> Result<T, BinverseError> {
     Deserializer::new_no_revision(p, 0).deserialize()
 }
 
@@ -80,6 +80,7 @@ pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
                 GameEnd::Winner(Color::White) => println!("White won the game!"),
                 GameEnd::Winner(Color::Black) => println!("Black won the game!"),
             }
+            std::thread::sleep(Duration::from_millis(100));
             break Ok(());
         }
     }

@@ -90,7 +90,7 @@ impl Board {
         fn pos(s: &str) -> Option<Pos> {
             let a = s.chars().next()?;
             let b = s.chars().next()?;
-            if s.chars().next().is_some() || a < 'a' || a > 'h' || b < '1' || b > '8' {
+            if s.chars().next().is_some() || !('a'..='h').contains(&a) || !('1'..='8').contains(&a) {
                 return None;
             }
             Some(Pos::new((a as u8 - b'a') as i8, (b as u8 - b'1') as i8))
