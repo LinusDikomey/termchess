@@ -1,6 +1,6 @@
 #![feature(hash_drain_filter, iter_intersperse)]
 
-use std::{fmt, io::Write, collections::{HashSet, HashMap}, error::Error, net::TcpStream, sync::{mpsc::{Receiver, self, TryRecvError}}, thread, time::Duration};
+use std::{fmt, io::Write, collections::{HashSet, HashMap}, error::Error, net::TcpStream, sync::{mpsc::{Receiver, self, TryRecvError}, Arc}, thread, time::Duration};
 use binverse::error::BinverseError;
 use board::Board;
 use color_format::{cwrite, cprintln, cformat};
@@ -111,25 +111,50 @@ fn main() -> Result<(), Box<dyn Error>> {
  
         cprintln!("  ~~~  #b<CHESS>   ~~~\n");
  
-        let term = Term::stdout();
+        let term = Arc::new(Term::stdout());
         term.hide_cursor()?;
-        
-        print!("{the_game}");
-        std::io::stdout().flush()?;
+        term.clear_screen()?;
 
-        let render = move |game: &Game, term: &Term| -> Result<(), Box<dyn Error>> {
-            //let mut stdout = std::io::stdout().into_raw_mode()?;
-            //write!(stdout, "{}", termion::cursor::Hide)?;
-            term.move_cursor_up(9)?;
-            term.move_cursor_left(100)?;
-            //write!(stdout, "{}{}", termion::cursor::Up(9), termion::cursor::Left(100))?;
-            //drop(stdout);
-            print!("{game}");
+        let (keys_tx, keys) = mpsc::channel();
+        {
+            let term = term.clone();
+            thread::spawn(move || {
+                loop {
+                    if let Err(_) = keys_tx.send(term.read_key().unwrap()) {
+                        break;
+                    }
+                }
+            });
+        }
+
+        let render = move |game: &Game| -> Result<(), Box<dyn Error>> {
+            use std::fmt::Write;
+            
+            //term.clear_screen()?;
+
+            let y_offset = 2;
+            
+            for i in 0..y_offset {
+                term.move_cursor_to(0, i)?;
+                term.clear_line()?;
+            }
+
+
+            let mut s = String::new();
+            write!(&mut s, "{game}")?;
+
+            for (i, line) in s.lines().enumerate() {
+                term.move_cursor_to(1, i + 2)?;
+                print!("{}", line);
+            }
+            
             std::io::stdout().flush()?;
             Ok(())
         };
 
-        game(render, term, the_game, remote)
+        render(&the_game)?;
+
+        game(render, keys, the_game, remote)
     }
 }
 
@@ -302,14 +327,14 @@ struct Remote {
 }
 
 fn game(
-    mut render: impl FnMut(&Game, &Term) -> Result<(), Box<dyn Error>>, 
-    term: Term,
+    mut render: impl FnMut(&Game) -> Result<(), Box<dyn Error>>, 
+    keys: Receiver<Key>,
     mut game: Game,
     mut remote: Option<Remote>
 ) -> Result<(), Box<dyn Error>> {
-    fn render_end(mut render: impl FnMut(&Game, &Term, ) -> Result<(), Box<dyn Error>>, game: Game, term: &Term, end: GameEnd)
+    fn render_end(mut render: impl FnMut(&Game) -> Result<(), Box<dyn Error>>, game: Game, end: GameEnd)
     -> Result<(), Box<dyn Error>> {
-        render(&game, term)?;
+        render(&game)?;
         match end {
             GameEnd::Winner(Color::Black) => cprintln!("\n\n{} #g<won> as Black!", game.black.name),
             GameEnd::Winner(Color::White) => cprintln!("\n\n{} #g<won> as White!", game.white.name),
@@ -329,12 +354,21 @@ fn game(
                     }
                     let end = game.play_move(vec2![m.x1, m.y1], vec2![m.x2, m.y2]);
                     if let Some(end) = end {
-                        render_end(render, game, &term, end)?;
+                        render_end(render, game, end)?;
                         return Ok(());
+                    } else {
+                        render(&game)?;
+                        continue;
                     }
-                    continue
                 }
-                Err(TryRecvError::Empty) => term.read_key()?,
+                Err(TryRecvError::Empty) => match keys.try_recv() {
+                    Ok(t) => t,
+                    Err(TryRecvError::Empty) => {
+                        std::thread::sleep(Duration::from_millis(10));
+                        continue;
+                    }
+                    Err(err) => panic!("Keys disconnected {err}")
+                }
                 Err(TryRecvError::Disconnected) => {
                     println!("Server disconnected!");
                     return Ok(())
@@ -342,7 +376,7 @@ fn game(
             }
 
         } else {
-            term.read_key()?
+            keys.recv()?
         };
 
         let up = |game: &mut Game| {
@@ -376,7 +410,7 @@ fn game(
                         }
                         let end = game.play_move(moving, cursor);
                         if let Some(end) = end {
-                            render_end(render, game, &term, end)?;
+                            render_end(render, game, end)?;
                             return Ok(());
                         }
                     }
@@ -399,6 +433,6 @@ fn game(
             _ => {}
         }
 
-        render(&game, &term)?;
+        render(&game)?;
     }
 }
