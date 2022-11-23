@@ -35,7 +35,7 @@ pub fn recv<T: Deserialize<R>, R: Read>(p: R) -> Result<T, BinverseError> {
 }
 
 pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind((IpAddr::from([127, 0, 0, 1]), 1337))?;
+    let listener = TcpListener::bind((IpAddr::from([0, 0, 0, 0]), 1337))?;
 
     let (mut p1, _) = listener.accept()?;
     let p1_info: PlayerInfo = recv(&mut p1)?;
