@@ -167,7 +167,7 @@ impl Board {
                 if let Some((piece, color)) = self[pos] {
                     if color == turn {
                         println!("\tat {pos}");
-                        let mut piece_moves = moves(self, piece, pos, color);
+                        let mut piece_moves = moves(self, piece, pos, color, false);
                         piece_moves.drain_filter(|to_pos| self.in_check_after(pos, *to_pos, turn));
                         total_moves += piece_moves.len();
                         all_moves.insert(pos, piece_moves);
@@ -284,17 +284,17 @@ impl Board {
         
         let king_pos = board_copy.find_king(color).expect("No king found");
 
-        board_copy.threatens(king_pos, !color)
+        board_copy.threatens(king_pos, !color, false)
     }
 
-    pub fn threatens(&self, pos: Pos, color: Color) -> bool {
+    pub fn threatens(&self, pos: Pos, color: Color, checked_by_castle: bool) -> bool {
         println!("\t\tthreatens?");
         for y in 0..8 {
             for x in 0..8 {
                 let other_pos = vec2![x, y];
                 if let Some((other_piece, other_color)) = self[other_pos] {
                     if other_color == color {
-                        let moves = moves(self, other_piece, other_pos, other_color);
+                        let moves = moves(self, other_piece, other_pos, other_color, checked_by_castle);
                         if moves.contains(&pos) {
                             return true;
                         }

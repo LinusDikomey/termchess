@@ -3,7 +3,7 @@ use vecm::vec2;
 
 use crate::{Piece, Pos, Color, board::Board};
 
-pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos> {
+pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color, checked_by_castle: bool) -> HashSet<Pos> {
     println!("\t\tmoves for {piece:?} at {pos:?}");
     #[derive(PartialEq, Eq)]
     enum Ty { No, Enemy, Ally }
@@ -47,7 +47,7 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos>
     match piece {
         Piece::King => {
             for y in 0.max(pos.y-1) ..= 7.min(pos.y+1) {
-                for x in (pos.x-1).max(0) ..= (pos.x+1).min(7) {
+                for x in 0.max(pos.x-1) ..= 7.min(pos.x+1) {
                     let cur = vec2![x, y];
                     if occupied(cur) != Ty::Ally {
                         moves.insert(cur);
@@ -59,17 +59,19 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color) -> HashSet<Pos>
             let y = if color == Color::Black { 7 } else { 0 };
             // performance optimization possible here by not recalculating all moves
 
-            if 
-                castle.long
+            if
+                !checked_by_castle
+                && castle.long
                 && (1..4).all(|x| occupied(vec2![x, y]) == Ty::No)
-                && (2..=4).all(|x| !game.threatens(vec2![x, y], !color))
+                && (2..=4).all(|x| !game.threatens(vec2![x, y], !color, true))
             {
                 moves.insert(vec2![2, y]);
             }
             if
-                castle.short
+                !checked_by_castle
+                && castle.short
                 && (5..7).all(|x| occupied(vec2![x, y]) == Ty::No)
-                && (4..=6).all(|x| !game.threatens(vec2![x, y], !color))
+                && (4..=6).all(|x| !game.threatens(vec2![x, y], !color, true))
             {
                 moves.insert(vec2![6, y]);
             }
