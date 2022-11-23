@@ -122,10 +122,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             });
         }
 
-        let render = move |game: &Game| -> Result<(), Box<dyn Error>> {
+        let render = move |game: &Game, term: &Term| -> Result<(), Box<dyn Error>> {
             use std::fmt::Write;
-            
-            //term.clear_screen()?;
 
             let y_offset = 2;
             
@@ -138,18 +136,28 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut s = String::new();
             write!(&mut s, "{game}")?;
 
+            let mut max_line = 0;
+
             for (i, line) in s.lines().enumerate() {
-                term.move_cursor_to(1, i + 2)?;
+                let y = i + 2;
+                term.move_cursor_to(1, y)?;
                 print!("{}", line);
+                max_line = y;
             }
+
+            for y in (max_line + 1)..(term.size().1 as usize) {
+                term.move_cursor_to(0, y)?;
+                term.clear_line()?;
+            }
+
             
             std::io::stdout().flush()?;
             Ok(())
         };
 
-        render(&the_game)?;
+        render(&the_game, &term)?;
 
-        game(render, keys, the_game, remote)
+        game(render, &term, keys, the_game, remote)
     }
 }
 
@@ -160,14 +168,15 @@ struct Remote {
 }
 
 fn game(
-    mut render: impl FnMut(&Game) -> Result<(), Box<dyn Error>>, 
+    mut render: impl FnMut(&Game, &Term) -> Result<(), Box<dyn Error>>,
+    term: &Term,
     keys: Receiver<Key>,
     mut game: Game,
     mut remote: Option<Remote>
 ) -> Result<(), Box<dyn Error>> {
-    fn render_end(mut render: impl FnMut(&Game) -> Result<(), Box<dyn Error>>, game: Game, end: GameEnd)
+    fn render_end(mut render: impl FnMut(&Game, &Term) -> Result<(), Box<dyn Error>>, game: Game, term: &Term, end: GameEnd)
     -> Result<(), Box<dyn Error>> {
-        render(&game)?;
+        render(&game, term)?;
         match end {
             GameEnd::Winner(Color::Black) => cprintln!("\n\n{} #g<won> as Black!", game.black.name),
             GameEnd::Winner(Color::White) => cprintln!("\n\n{} #g<won> as White!", game.white.name),
@@ -177,7 +186,17 @@ fn game(
         Ok(())
     }
 
+    let mut last_term_size = term.size();
+
     loop {
+        let term_size = term.size();
+        
+        if term_size != last_term_size {
+            last_term_size = term_size;
+            term.clear_screen()?;
+            render(&game, term)?;
+        }
+
         let key = if let Some(remote) = &remote {
             match remote.server.try_recv() {
                 Ok(m) => {
@@ -185,12 +204,17 @@ fn game(
                         println!("Remote sent move while it was your turn!");
                         return Ok(());
                     }
-                    let end = game.play_move(vec2![m.x1, m.y1], vec2![m.x2, m.y2]);
+                    let from = vec2![m.x1, m.y1];
+                    let to = vec2![m.x2, m.y2];
+                    if !game.possible_moves.get(&from).map_or(false, |moves| moves.contains(&to)) {
+                        panic!("Enemy played illegal move: {from} -> {to}");
+                    }
+                    let end = game.play_move(from, to);
                     if let Some(end) = end {
-                        render_end(render, game, end)?;
+                        render_end(render, game, term, end)?;
                         return Ok(());
                     } else {
-                        render(&game)?;
+                        render(&game, term)?;
                         continue;
                     }
                 }
@@ -243,7 +267,7 @@ fn game(
                         }
                         let end = game.play_move(moving, cursor);
                         if let Some(end) = end {
-                            render_end(render, game, end)?;
+                            render_end(render, game, term, end)?;
                             return Ok(());
                         }
                     }
@@ -266,6 +290,6 @@ fn game(
             _ => {}
         }
 
-        render(&game)?;
+        render(&game, term)?;
     }
 }

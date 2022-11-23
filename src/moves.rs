@@ -4,7 +4,6 @@ use vecm::vec2;
 use crate::{Piece, Pos, Color, board::Board};
 
 pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color, checked_by_castle: bool) -> HashSet<Pos> {
-    println!("\t\tmoves for {piece:?} at {pos:?}");
     #[derive(PartialEq, Eq)]
     enum Ty { No, Enemy, Ally }
     let occupied = |p: Pos| -> Ty {
@@ -121,7 +120,6 @@ pub fn moves(game: &Board, piece: Piece, pos: Pos, color: Color, checked_by_cast
             }
         }
     }
-    println!("\t\tmoves for {piece:?} at {pos:?} OK");
     moves
 }
 

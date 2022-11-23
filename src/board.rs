@@ -157,7 +157,6 @@ impl Board {
     }
 
     pub fn moves(&self, turn: Color) -> (HashMap<Pos, HashSet<Pos>>, usize) {
-        println!("Getting all moves for {turn:?}");
         let mut all_moves = HashMap::new();
 
         let mut total_moves = 0;
@@ -166,7 +165,6 @@ impl Board {
                 let pos = vec2![x, y];
                 if let Some((piece, color)) = self[pos] {
                     if color == turn {
-                        println!("\tat {pos}");
                         let mut piece_moves = moves(self, piece, pos, color, false);
                         piece_moves.drain_filter(|to_pos| self.in_check_after(pos, *to_pos, turn));
                         total_moves += piece_moves.len();
@@ -275,7 +273,6 @@ impl Board {
         None
     }
     pub fn in_check_after(&self, from: Pos, to: Pos, color: Color) -> bool {
-        println!("\t\tin check?");
         assert!(self[from].unwrap().1 == color);
 
         // board after the move to find checks
@@ -288,7 +285,6 @@ impl Board {
     }
 
     pub fn threatens(&self, pos: Pos, color: Color, checked_by_castle: bool) -> bool {
-        println!("\t\tthreatens?");
         for y in 0..8 {
             for x in 0..8 {
                 let other_pos = vec2![x, y];
