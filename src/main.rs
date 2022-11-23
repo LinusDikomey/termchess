@@ -39,10 +39,10 @@ fn main() -> Result<(), Box<dyn Error>> {
     };  
     if server {
         loop {
-            match server::game(board, color) {
-                Ok(()) => println!("Played a game!"),
+            match server::run(board, color) {
+                Ok(()) => println!("Server ended"),
                 Err(err) => {
-                    println!("Game failed: {err}");
+                    println!("Server failed: {err}");
                     std::thread::sleep(Duration::from_millis(500));
                 }
             }

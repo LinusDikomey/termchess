@@ -1,4 +1,4 @@
-use std::{error::Error, net::{TcpListener, IpAddr}, io::{Read, Write}, time::Duration};
+use std::{error::Error, net::{TcpListener, IpAddr, TcpStream}, io::{Read, Write}, thread};
 
 use binverse::{streams::{Serializer, Deserializer}, serialize::{Serialize, Deserialize}, error::BinverseError};
 use binverse_derive::serializable;
@@ -34,20 +34,7 @@ pub fn recv<T: Deserialize<R>, R: Read>(p: R) -> Result<T, BinverseError> {
     Deserializer::new_no_revision(p, 0).deserialize()
 }
 
-pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
-    let listener = TcpListener::bind((IpAddr::from([0, 0, 0, 0]), 1337))?;
-
-    let (mut p1, _) = listener.accept()?;
-    let p1_info: PlayerInfo = recv(&mut p1)?;
-    println!("Player 1: {} connected", p1_info.name);
-
-    let (mut p2, _) = listener.accept()?;
-    let p2_info: PlayerInfo = recv(&mut p2)?;
-    println!("Player 2: {} connected", p2_info.name);
-
-    send(&mut p1, GameInfo { other_player: p2_info.name, is_black: false })?;
-    send(&mut p2, GameInfo { other_player: p1_info.name, is_black: true })?;
-
+fn game(mut board: Board, mut turn: Color, mut p1: TcpStream, mut p2: TcpStream) -> Result<(), Box<dyn Error>> {
     loop {
         let mover = if turn == Color::White { &mut p1 } else { &mut p2 };
         let played_move: Move = Deserializer::new_no_revision(mover, 0).deserialize()?;
@@ -63,7 +50,7 @@ pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
         let (_, count) = board.moves(turn);
 
         let game_end = if count == 0 {
-            let king_pos = board.find_king(turn).expect("king not found");
+            let king_pos = board.find_king(turn).ok_or("king not found")?;
             if board.moves(!turn).0.iter().any(|(_, moves)| moves.contains(&king_pos)) {
                 Some(GameEnd::Winner(!turn))
             } else {
@@ -81,8 +68,36 @@ pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
                 GameEnd::Winner(Color::White) => println!("White won the game!"),
                 GameEnd::Winner(Color::Black) => println!("Black won the game!"),
             }
-            std::thread::sleep(Duration::from_millis(100));
             break Ok(());
         }
+    }
+}
+
+pub fn run(board: Board, turn: Color) -> Result<(), Box<dyn Error>> {
+    let listener = TcpListener::bind((IpAddr::from([0, 0, 0, 0]), 1337))?;
+
+    let mut next_game_id = 1;
+
+    loop {
+        let (mut p1, _) = listener.accept()?;
+        let p1_info: PlayerInfo = recv(&mut p1)?;
+        println!("Player 1: {} connected", p1_info.name);
+    
+        let (mut p2, _) = listener.accept()?;
+        let p2_info: PlayerInfo = recv(&mut p2)?;
+        println!("Player 2: {} connected", p2_info.name);
+    
+        send(&mut p1, GameInfo { other_player: p2_info.name, is_black: false })?;
+        send(&mut p2, GameInfo { other_player: p1_info.name, is_black: true })?;
+
+        let game_id = next_game_id;
+        next_game_id += 1;
+
+        thread::spawn(move || {
+            match game(board, turn, p1, p2) {
+                Ok(()) => println!("Game #{game_id} finished successfully"),
+                Err(err) => println!("Game #{game_id} aborted: {err:?}"),
+            }
+        });
     }
 }
