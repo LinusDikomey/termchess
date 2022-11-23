@@ -61,8 +61,10 @@ pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
         turn = !turn;
         
         let (_, count) = board.moves(turn);
+        println!("{count} moves found");
         let game_end = if count == 0 {
             let king_pos = board.find_king(turn).expect("king not found");
+            println!("King found at {king_pos}");
             if board.moves(!turn).0.iter().any(|(_, moves)| moves.contains(&king_pos)) {
                 Some(GameEnd::Winner(!turn))
             } else {
@@ -70,6 +72,7 @@ pub fn game(mut board: Board, mut turn: Color) -> Result<(), Box<dyn Error>> {
             }
         } else { None };
 
+        println!("serializing move");
         let other = if turn == Color::White { &mut p1 } else { &mut p2 };
         let mut s = Serializer::new_no_revision(other);
         played_move.serialize(&mut s)?;

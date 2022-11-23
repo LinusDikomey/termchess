@@ -1,4 +1,3 @@
-/target/
-/.vscode/
+target/
+.vscode/
 debug
-/.vscode/
