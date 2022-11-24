@@ -1,34 +1,50 @@
 #![feature(hash_drain_filter, iter_intersperse)]
 
-use std::{io::Write, error::Error, net::TcpStream, sync::{mpsc::{Receiver, self, TryRecvError}, Arc}, thread, time::Duration};
-use binverse::error::BinverseError;
+use std::{io::Write, error::Error, sync::{mpsc::{Receiver, self, TryRecvError}, Arc}, thread::{self, JoinHandle}, time::Duration};
 use board::Board;
 use color_format::cprintln;
 use console::{Term, Key};
 use piece::{Color, Piece};
-use server::Move;
+use online::{Move, Remote};
 use vecm::{vec::PolyVec2, vec2};
 
-use crate::{server::send, game::{Game, GameEnd}};
+use crate::game::{Game, GameEnd};
 
+mod ai;
 mod board;
 mod game;
 mod moves;
 mod piece;
-mod server;
+mod online;
 
 type Pos = PolyVec2<i8>;
+
+enum PlayerType {
+    Me,
+    Remote(Remote),
+    Cpu {
+        depth: usize,
+        computation: Option<JoinHandle<ai::Move>>,
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     let mut args = std::env::args().skip(1);
     let mut server = false;
     let mut fen = None;
     let mut ip = None;
+    let mut ai = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "-s" | "--server" => server = true,
             "-f" | "--fen" => fen = Some(args.next().expect("fen expected after -f/--fen")),
             "-c" | "--connect" => ip = Some(args.next().expect("connect requires ip")),
+            "-a" | "--ai" => ai = Some(
+                args.next()
+                    .expect("give ai depth as argument")
+                    .parse::<usize>()
+                    .expect("depth has to be a positive integer")
+                ),
             _ => eprintln!("unrecognized arg {arg}")
         }
     }
@@ -39,7 +55,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     };  
     if server {
         loop {
-            match server::run(board, color) {
+            match online::run_server(board, color) {
                 Ok(()) => println!("Server ended"),
                 Err(err) => {
                     println!("Server failed: {err}");
@@ -54,12 +70,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::io::stdin().read_line(&mut name)?;
         name = name.trim().to_owned();
 
-        let (the_game, remote) = if let Some(ip) = ip {
+        let (the_game, white, black) = if let Some(ip) = ip {
             println!("Connecting to ip: {ip}");
-            let mut server = TcpStream::connect(ip)?;
-            server::send(&mut server, server::PlayerInfo { name: name.clone() })?;
-            let game_info: server::GameInfo = server::recv(&mut server)?;
+            let (remote, game_info) = online::connect(&ip, name.clone())?;
 
+            
             let mut white_name = name;
             let mut black_name = game_info.other_player;
             if game_info.is_black {
@@ -69,38 +84,24 @@ fn main() -> Result<(), Box<dyn Error>> {
             let mut game = Game::new(vec2![0, 0], white_name, black_name, board, color);
             game.flip_board = game_info.is_black;
 
-            let (tx, rx) = mpsc::channel();
-
-            let server2 = server.try_clone()?;
-            thread::spawn(move || {
-                let mut server = server2;
-                loop {
-                    match server::recv(&mut server) {
-                        Ok(move_) => match tx.send(move_) {
-                            Ok(_) => {}
-                            Err(_) => break
-                        }
-                        Err(BinverseError::IO(io)) if io.kind() == std::io::ErrorKind::UnexpectedEof => {
-                            break
-                        }
-                        Err(err) => {
-                            println!("Server disconnected {err:?}");
-                            break
-                        }
-                    }
-                }
-            });
-
-            let remote = Remote {
-                server: rx,
-                color: if game_info.is_black { Color::Black } else { Color::White },
-                socket: server,
+            let me = if let Some(depth) = ai {
+                PlayerType::Cpu { depth, computation: None }
+            } else {
+                PlayerType::Me
             };
-            (game, Some(remote))
+
+            if game_info.is_black {
+                (game, PlayerType::Remote(remote), me)
+            } else {
+                (game, me, PlayerType::Remote(remote))
+            }
         
+        } else if let Some(depth) = ai { 
+            let game = Game::new(vec2![0, 0], name.clone(), format!("Computer ({depth})"), board, color);
+            (game, PlayerType::Me, PlayerType::Cpu { depth, computation: None })
         } else {
-            let game = Game::new(vec2![0, 0], name.clone(), "Computer".to_owned(), board, color);
-            (game, None)
+            let game = Game::new(vec2![0, 0], name.clone(), name, board, color);
+            (game, PlayerType::Me, PlayerType::Me)
         };
 
  
@@ -157,14 +158,8 @@ fn main() -> Result<(), Box<dyn Error>> {
 
         render(&the_game, &term)?;
 
-        game(render, &term, keys, the_game, remote)
+        game(render, &term, keys, the_game, white, black)
     }
-}
-
-struct Remote {
-    socket: TcpStream,
-    server: Receiver<Move>,
-    color: Color,
 }
 
 fn game(
@@ -172,7 +167,8 @@ fn game(
     term: &Term,
     keys: Receiver<Key>,
     mut game: Game,
-    mut remote: Option<Remote>
+    mut white: PlayerType,
+    mut black: PlayerType,
 ) -> Result<(), Box<dyn Error>> {
     fn render_end(mut render: impl FnMut(&Game, &Term) -> Result<(), Box<dyn Error>>, game: Game, term: &Term, end: GameEnd)
     -> Result<(), Box<dyn Error>> {
@@ -188,6 +184,18 @@ fn game(
 
     let mut last_term_size = term.size();
 
+    fn play(game: &mut Game, from: Pos, to: Pos, white: &mut PlayerType, black: &mut PlayerType) -> Result<Option<GameEnd>, Box<dyn Error>> {
+        if !game.possible_moves.get(&from).map_or(false, |moves| moves.contains(&to)) {
+            panic!("{:?} played illegal move: {from} -> {to}", game.turn);
+        }
+        let other_player = if game.turn == Color::White { black } else { white };
+        if let PlayerType::Remote(remote) = other_player {
+            online::send(&mut remote.socket, Move { x1: from.x, y1: from.y, x2: to.x, y2: to.y })?;
+
+        }
+        Ok(game.play_move(from, to))
+    }
+
     loop {
         let term_size = term.size();
         
@@ -197,28 +205,51 @@ fn game(
             render(&game, term)?;
         }
 
-        let key = if let Some(remote) = &remote {
-            match remote.server.try_recv() {
-                Ok(m) => {
-                    if game.turn == remote.color {
-                        println!("Remote sent move while it was your turn!");
-                        return Ok(());
+        let active_player = if game.turn == Color::White { &mut white } else { &mut black };
+
+        let key = match active_player {
+            PlayerType::Me => keys.recv().unwrap(),
+            PlayerType::Remote(remote) => {
+                match remote.server.try_recv() {
+                    Ok(m) => {
+                        if let Some(end) = play(&mut game, vec2![m.x1, m.y1], vec2![m.x2, m.y2], &mut white, &mut black)? {
+                            render_end(render, game, term, end)?;
+                            return Ok(());
+                        } else {
+                            render(&game, term)?;
+                            continue;
+                        }
                     }
-                    let from = vec2![m.x1, m.y1];
-                    let to = vec2![m.x2, m.y2];
-                    if !game.possible_moves.get(&from).map_or(false, |moves| moves.contains(&to)) {
-                        panic!("Enemy played illegal move: {from} -> {to}");
+                    Err(TryRecvError::Empty) => match keys.try_recv() {
+                        Ok(t) => t,
+                        Err(TryRecvError::Empty) => {
+                            std::thread::sleep(Duration::from_millis(10));
+                            continue;
+                        }
+                        Err(TryRecvError::Disconnected) => panic!("Keys disconnected")
                     }
-                    let end = game.play_move(from, to);
-                    if let Some(end) = end {
-                        render_end(render, game, term, end)?;
+                    Err(TryRecvError::Disconnected) => {
+                        eprintln!("Server disconnected");
                         return Ok(());
-                    } else {
-                        render(&game, term)?;
-                        continue;
                     }
                 }
-                Err(TryRecvError::Empty) => match keys.try_recv() {
+            }
+            PlayerType::Cpu { depth, computation } => {
+                if let Some(available_computation) = computation {
+                    if available_computation.is_finished() {
+                        let mov = computation.take().unwrap().join().expect("AI compute thread failed");
+                        if let Some(end) = play(&mut game, mov.from, mov.to, &mut white, &mut black)? {
+                            render_end(render, game, term, end)?;
+                            return Ok(());
+                        } else {
+                            render(&game, term)?;
+                            continue;
+                        }
+                    }
+                } else {
+                    *computation = Some(ai::movalyzer(&game.board, game.turn, *depth));
+                }
+                match keys.try_recv() {
                     Ok(t) => t,
                     Err(TryRecvError::Empty) => {
                         std::thread::sleep(Duration::from_millis(10));
@@ -226,14 +257,7 @@ fn game(
                     }
                     Err(err) => panic!("Keys disconnected {err}")
                 }
-                Err(TryRecvError::Disconnected) => {
-                    println!("\n\nServer disconnected!");
-                    return Ok(())
-                }
             }
-
-        } else {
-            keys.recv()?
         };
 
         let up = |game: &mut Game| {
@@ -253,20 +277,14 @@ fn game(
             Key::Char('e') | Key::ArrowUp => if game.flip_board { down(&mut game) } else { up(&mut game) }
             Key::Char('n') | Key::ArrowDown => if game.flip_board { up(&mut game) } else { down(&mut game) }
             Key::Char(' ') | Key::Char('\n') => {
-                if let Some(remote) = &remote {
-                    if game.turn != remote.color {
-                        game.moving = None;
-                        continue;
-                    }
+                if !matches!(active_player, PlayerType::Me) {
+                    game.moving = None;
+                    continue;
                 }
                 if let Some(moving) = game.moving {
                     let cursor = game.cursor;
                     if game.possible_moves.get(&moving).unwrap().contains(&cursor) {
-                        if let Some(remote) = &mut remote {
-                            send(&mut remote.socket, Move { x1: moving.x, y1: moving.y, x2: cursor.x, y2: cursor.y })?;
-                        }
-                        let end = game.play_move(moving, cursor);
-                        if let Some(end) = end {
+                        if let Some(end) = play(&mut game, moving, cursor, &mut white, &mut black)? {
                             render_end(render, game, term, end)?;
                             return Ok(());
                         }
